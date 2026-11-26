@@ -36,6 +36,11 @@ button.primary{background:var(--accent);color:#111;border-color:var(--accent);fo
 button.primary:disabled{opacity:.4;cursor:not-allowed}
 button.on{border-color:var(--accent);color:var(--accent)}
 .search{display:flex;gap:6px}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.tabs button{padding:9px 4px;font-weight:600;font-size:13px}
+.tabs button.on{background:#2a2410}
+.btns{display:flex;gap:6px}
+.btns button{flex:1}
 .presets{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .presets button{text-align:left;padding:8px}
 .presets button b{display:block;font-size:13px}
@@ -74,22 +79,37 @@ code{background:var(--panel2);padding:1px 4px;border-radius:4px;font-size:12px}
 <header><h1>🚁 Drone Shot Presets</h1><span class="tag">Plan cinematic shots → export a DJI Fly waypoint mission (Air 3S)</span></header>
 <main>
 <aside>
-  <h2>1 · Pick the building</h2>
+  <h2>1 · What are you filming?</h2>
+  <div class="tabs" id="tabs"></div>
+
+  <h2>2 · Find the spot</h2>
   <div class="search">
     <input id="q" type="text" placeholder="Search address or paste lat, lon">
     <button id="go">Find</button>
   </div>
-  <p class="note" id="pinInfo">Or tap the map to drop the pin on the building's centre. Drag the pin to adjust.</p>
+  <p class="note" id="spotHint"></p>
+  <p class="note" id="pinInfo"></p>
 
-  <h2>2 · Building</h2>
-  <div id="bldgParams"></div>
+  <div id="ctxBuilding">
+    <h2>3 · Building</h2>
+    <div id="bldgParams"></div>
+  </div>
+  <div id="ctxArea">
+    <h2>3 · Area</h2>
+    <p class="note">The pin is the centre of the area, or your subject for a Dronie. Every shot is placed around it.</p>
+  </div>
+  <div id="ctxRoad">
+    <h2>3 · Road</h2>
+    <p class="note" id="routeInfo"></p>
+    <div class="btns"><button id="rUndo">Undo point</button><button id="rClear">Clear road</button></div>
+  </div>
 
-  <h2>3 · Shot</h2>
+  <h2>4 · Shot</h2>
   <div class="presets" id="presets"></div>
   <p class="note" id="presetDesc"></p>
   <div id="shotParams"></div>
 
-  <h2>4 · Flight</h2>
+  <h2>5 · Flight</h2>
   <div id="flightParams"></div>
   <div class="stats">
     <div class="stat"><b id="sDur">–</b><span>shot length</span></div>
@@ -99,7 +119,7 @@ code{background:var(--panel2);padding:1px 4px;border-radius:4px;font-size:12px}
   </div>
   <ul class="warns" id="warns"></ul>
 
-  <h2>5 · Export to DJI Fly</h2>
+  <h2>6 · Export to DJI Fly</h2>
   <div class="stack">
     <label class="file" id="fileBox">
       <input type="file" id="tpl" accept=".kmz" hidden>
@@ -120,7 +140,7 @@ code{background:var(--panel2);padding:1px 4px;border-radius:4px;font-size:12px}
       <li><b>Load it above</b>, plan the shot, press <b>Export</b>. You get a file with the <i>exact same name</i>.</li>
       <li><b>Put it back:</b> replace the original file in the same folder (AirDrop to iPhone → Save to Files → that folder → Replace).</li>
       <li><b>Force-close DJI Fly</b>, reopen it, open your waypoint flight. Check the path on the map looks right.</li>
-      <li>Take off from <b>ground level near the building</b> (heights are measured from take-off), press record, press Go. Keep your thumbs near the sticks.</li>
+      <li>Take off from <b>ground level near the start of the shot</b> (heights are measured from take-off), press record, press Go. Keep your thumbs near the sticks.</li>
     </ol>
     <p class="note">This file-swap trick is used by Litchi Hub and works on the Air 3/3S, but DJI Fly updates sometimes break it. If the mission loads blank, re-make the placeholder after updating DJI Fly.</p>
   </details>
@@ -158,14 +178,29 @@ const mmss = s => { s = Math.max(0, Math.round(s)); return String(Math.floor(s /
 
 // ---------------- presets ----------------
 const DIR = { k: "dir", label: "Direction", type: "select", options: [["cw", "Clockwise"], ["ccw", "Anticlockwise"]], def: "cw" };
+const REV = { k: "rev", label: "Fly the road", type: "select", options: [["fwd", "Start → end (as drawn)"], ["back", "End → start"]], def: "fwd" };
+const BEAR = (label, def = 180) => ({ k: "bearing", label, unit: "°", min: 0, max: 355, step: 5, def });
+const SECTIONS = { building: "Buildings", area: "Area", road: "Roads" };
+const HINTS = {
+  building: "Tap the map to drop the pin on the centre of the building. Drag the pin to adjust.",
+  area: "Tap the map to drop the pin on the centre of the area (or on your subject).",
+  road: "Search for the road, then tap along it on the map, start to end, to draw the drone's path."
+};
 const PRESETS = {
-  orbit: { name: "Orbit", sub: "circle, camera locked on", desc: "Flies a circle around the building with the camera always pointed at it.",
+  // ---- buildings ----
+  orbit: { section: "building", name: "Orbit", sub: "circle, camera locked on", desc: "Flies a circle around the building with the camera always pointed at it.",
     params: [
       { k: "radius", label: "Distance from centre", unit: "m", min: 10, max: 300, def: 45 },
       { k: "alt", label: "Altitude", unit: "m", min: 2, max: 120, def: 35 },
       { k: "sweep", label: "How far round", unit: "°", min: 45, max: 720, step: 15, def: 360 },
       { k: "start", label: "Start side (compass bearing)", unit: "°", min: 0, max: 355, step: 5, def: 180 }, DIR] },
-  spiral: { name: "Spiral up", sub: "orbit while climbing", desc: "Orbits while rising and widening, so the building reveals from low to high.",
+  arc: { section: "building", name: "Parallax arc", sub: "short, close, slow", desc: "A slow partial orbit close to the building. The background slides behind it, which gives the shot depth.",
+    params: [
+      { k: "radius", label: "Distance from centre", unit: "m", min: 10, max: 200, def: 35 },
+      { k: "alt", label: "Altitude", unit: "m", min: 2, max: 120, def: 20 },
+      { k: "sweep", label: "Arc length", unit: "°", min: 20, max: 180, step: 5, def: 90 },
+      { k: "start", label: "Start side (compass bearing)", unit: "°", min: 0, max: 355, step: 5, def: 135 }, DIR] },
+  spiral: { section: "building", name: "Helix / spiral up", sub: "orbit while climbing", desc: "Orbits while rising and widening, so the building reveals from low to high.",
     params: [
       { k: "r1", label: "Start distance", unit: "m", min: 10, max: 300, def: 35 },
       { k: "r2", label: "End distance", unit: "m", min: 10, max: 300, def: 60 },
@@ -173,34 +208,124 @@ const PRESETS = {
       { k: "z2", label: "End altitude", unit: "m", min: 2, max: 120, def: 70 },
       { k: "sweep", label: "How far round", unit: "°", min: 90, max: 720, step: 15, def: 450 },
       { k: "start", label: "Start side (compass bearing)", unit: "°", min: 0, max: 355, step: 5, def: 180 }, DIR] },
-  pushin: { name: "Low push-in", sub: "skim low toward it", desc: "Skims in low and straight toward the building. The camera tilts up as it gets close.",
+  pushin: { section: "building", name: "Low push-in", sub: "skim low toward it", desc: "Skims in low and straight toward the building. The camera tilts up as it gets close.",
     params: [
-      { k: "bearing", label: "Approach from (compass bearing)", unit: "°", min: 0, max: 355, step: 5, def: 180 },
+      BEAR("Approach from (compass bearing)"),
       { k: "d1", label: "Start distance", unit: "m", min: 20, max: 400, def: 150 },
       { k: "d2", label: "End distance", unit: "m", min: 10, max: 300, def: 35 },
       { k: "z1", label: "Start altitude", unit: "m", min: 2, max: 60, def: 3 },
       { k: "z2", label: "End altitude", unit: "m", min: 2, max: 60, def: 5 },
       { k: "cam", label: "Camera", type: "select", options: [["aim", "Track the building"], ["level", "Level (horizon)"]], def: "aim" }] },
-  reveal: { name: "Pull-back reveal", sub: "back up and rise", desc: "Starts close, then pulls back and climbs to reveal the whole building and its surroundings.",
+  pedestal: { section: "building", name: "Pedestal rise", sub: "straight up the facade", desc: "Rises straight up in front of the facade, from street level to above the roof.",
     params: [
-      { k: "bearing", label: "Pull back toward (compass bearing)", unit: "°", min: 0, max: 355, step: 5, def: 180 },
+      BEAR("Facing side (compass bearing)"),
+      { k: "dist", label: "Distance from centre", unit: "m", min: 10, max: 200, def: 45 },
+      { k: "z1", label: "Start altitude", unit: "m", min: 2, max: 120, def: 3 },
+      { k: "z2", label: "End altitude", unit: "m", min: 5, max: 120, def: 45 },
+      { k: "cam", label: "Camera", type: "select", options: [["level", "Level (straight ahead)"], ["aim", "Track the aim point"]], def: "level" }] },
+  flyover: { section: "building", name: "Fly-over reveal", sub: "climb over the roof", desc: "Approaches low, climbs over the roof and keeps going, tilting down to reveal what's on the other side.",
+    params: [
+      BEAR("Approach from (compass bearing)"),
+      { k: "d1", label: "Start distance", unit: "m", min: 40, max: 400, def: 160 },
+      { k: "d2", label: "Carry on past it by", unit: "m", min: 20, max: 300, def: 90 },
+      { k: "z1", label: "Start altitude", unit: "m", min: 2, max: 100, def: 10 },
+      { k: "clear", label: "Clearance over the roof", unit: "m", min: 10, max: 60, def: 15 }] },
+  reveal: { section: "building", name: "Pull-back reveal", sub: "back up and rise", desc: "Starts close, then pulls back and climbs to reveal the whole building and its surroundings.",
+    params: [
+      BEAR("Pull back toward (compass bearing)"),
       { k: "d1", label: "Start distance", unit: "m", min: 10, max: 200, def: 25 },
       { k: "d2", label: "End distance", unit: "m", min: 20, max: 400, def: 150 },
       { k: "z1", label: "Start altitude", unit: "m", min: 2, max: 120, def: 8 },
       { k: "z2", label: "End altitude", unit: "m", min: 2, max: 120, def: 75 }] },
-  flyby: { name: "Fly-by", sub: "slide past, tracking it", desc: "Flies a straight line past the building while the camera tracks it, giving strong parallax.",
+  flyby: { section: "building", name: "Fly-by", sub: "slide past, tracking it", desc: "Flies a straight line past the building while the camera tracks it, giving strong parallax.",
     params: [
-      { k: "bearing", label: "Which side (compass bearing)", unit: "°", min: 0, max: 355, step: 5, def: 180 },
+      BEAR("Which side (compass bearing)"),
       { k: "offset", label: "Distance from building", unit: "m", min: 15, max: 300, def: 60 },
       { k: "length", label: "Line length", unit: "m", min: 40, max: 600, step: 10, def: 220 },
       { k: "alt", label: "Altitude", unit: "m", min: 2, max: 120, def: 25 },
       { k: "dir", label: "Direction", type: "select", options: [["lr", "Left → right"], ["rl", "Right → left"]], def: "lr" }] },
-  topdown: { name: "Top-down rise", sub: "bird's-eye + rotate", desc: "Hovers above the building looking straight down, rising and slowly rotating.",
+  diagonal: { section: "building", name: "Diagonal rise", sub: "slide sideways + climb", desc: "Slides past the building while climbing, camera locked on. A dramatic diagonal move.",
+    params: [
+      BEAR("Which side (compass bearing)"),
+      { k: "offset", label: "Distance from building", unit: "m", min: 15, max: 300, def: 60 },
+      { k: "length", label: "Line length", unit: "m", min: 40, max: 600, step: 10, def: 160 },
+      { k: "z1", label: "Start altitude", unit: "m", min: 2, max: 120, def: 5 },
+      { k: "z2", label: "End altitude", unit: "m", min: 2, max: 120, def: 60 },
+      { k: "dir", label: "Direction", type: "select", options: [["lr", "Left → right"], ["rl", "Right → left"]], def: "lr" }] },
+  topdown: { section: "building", name: "Top-down rise", sub: "bird's-eye + rotate", desc: "Hovers above the building looking straight down, rising and slowly rotating.",
     params: [
       { k: "z1", label: "Start altitude", unit: "m", min: 10, max: 120, def: 50 },
       { k: "z2", label: "End altitude", unit: "m", min: 10, max: 120, def: 110 },
       { k: "start", label: "Start heading", unit: "°", min: 0, max: 355, step: 5, def: 0 },
-      { k: "rotate", label: "Rotate by", unit: "°", min: -180, max: 180, step: 5, def: 90 }] }
+      { k: "rotate", label: "Rotate by", unit: "°", min: -180, max: 180, step: 5, def: 90 }] },
+  // ---- area / landscape ----
+  establish: { section: "area", name: "Establishing glide", sub: "high, slow, forward", desc: "A high, slow glide toward the area. This is the classic opening shot of a film.",
+    params: [
+      BEAR("Come in from (compass bearing)"),
+      { k: "d1", label: "Start distance", unit: "m", min: 50, max: 800, step: 10, def: 450 },
+      { k: "d2", label: "End distance", unit: "m", min: 0, max: 600, step: 10, def: 120 },
+      { k: "alt", label: "Altitude", unit: "m", min: 20, max: 120, def: 90 },
+      { k: "pitch", label: "Camera tilt", unit: "°", min: -60, max: 0, def: -15 }] },
+  tiltdown: { section: "area", name: "Tilt-down reveal", sub: "horizon → the view", desc: "Flies forward with the camera on the horizon, then tilts down to reveal the area underneath.",
+    params: [
+      BEAR("Come in from (compass bearing)"),
+      { k: "d1", label: "Start distance", unit: "m", min: 30, max: 600, step: 10, def: 220 },
+      { k: "d2", label: "End distance", unit: "m", min: 0, max: 400, step: 10, def: 0 },
+      { k: "alt", label: "Altitude", unit: "m", min: 15, max: 120, def: 60 },
+      { k: "p1", label: "Start tilt (sky/horizon)", unit: "°", min: -30, max: 20, def: 5 },
+      { k: "p2", label: "End tilt (looking down)", unit: "°", min: -90, max: -10, def: -65 }] },
+  rocket: { section: "area", name: "Rocket", sub: "straight up, looking down", desc: "Shoots straight up above the pin with the camera pointing down, like zooming out of a map.",
+    params: [
+      { k: "z1", label: "Start altitude", unit: "m", min: 3, max: 60, def: 5 },
+      { k: "z2", label: "End altitude", unit: "m", min: 20, max: 120, def: 120 },
+      { k: "heading", label: "Frame orientation", unit: "°", min: 0, max: 355, step: 5, def: 0 }] },
+  dronie: { section: "area", name: "Dronie", sub: "back & up from a subject", desc: "Starts close to a person or object at the pin, then flies backwards and up, keeping it in frame.",
+    params: [
+      BEAR("Fly away toward (compass bearing)"),
+      { k: "d1", label: "Start distance", unit: "m", min: 3, max: 50, def: 6 },
+      { k: "d2", label: "End distance", unit: "m", min: 20, max: 400, def: 120 },
+      { k: "z1", label: "Start altitude", unit: "m", min: 2, max: 30, def: 3 },
+      { k: "z2", label: "End altitude", unit: "m", min: 10, max: 120, def: 70 }] },
+  birdseye: { section: "area", name: "Bird's-eye glide", sub: "top-down, straight line", desc: "Glides in a straight line over the pin with the camera pointing straight down. Great for fields, coastlines and patterns.",
+    params: [
+      { k: "bearing", label: "Direction of travel", unit: "°", min: 0, max: 355, step: 5, def: 0 },
+      { k: "length", label: "Line length", unit: "m", min: 50, max: 800, step: 10, def: 300 },
+      { k: "alt", label: "Altitude", unit: "m", min: 20, max: 120, def: 80 }] },
+  panorama: { section: "area", name: "Panorama sweep", sub: "turn on the spot", desc: "Hovers at the pin and slowly turns to sweep across the whole view.",
+    params: [
+      { k: "alt", label: "Altitude", unit: "m", min: 10, max: 120, def: 60 },
+      { k: "start", label: "Start facing", unit: "°", min: 0, max: 355, step: 5, def: 90 },
+      { k: "sweep", label: "Turn by", unit: "°", min: 45, max: 360, step: 15, def: 180 },
+      { k: "pitch", label: "Camera tilt", unit: "°", min: -60, max: 10, def: -10 },
+      { k: "turn", label: "Turn speed", unit: "°/s", min: 3, max: 15, def: 6 }, DIR] },
+  areaorbit: { section: "area", name: "Wide orbit", sub: "big circle, looking in", desc: "A big, slow circle around the area, with the camera aimed at the ground in the middle.",
+    params: [
+      { k: "radius", label: "Distance from centre", unit: "m", min: 50, max: 500, step: 5, def: 200 },
+      { k: "alt", label: "Altitude", unit: "m", min: 20, max: 120, def: 100 },
+      { k: "sweep", label: "How far round", unit: "°", min: 45, max: 360, step: 15, def: 360 },
+      { k: "start", label: "Start side (compass bearing)", unit: "°", min: 0, max: 355, step: 5, def: 180 }, DIR] },
+  // ---- roads ----
+  chase: { section: "road", name: "Road chase", sub: "follow it, look ahead", desc: "Flies along the road looking ahead down it, like chasing a car.",
+    params: [
+      { k: "alt", label: "Altitude", unit: "m", min: 5, max: 120, def: 20 },
+      { k: "pitch", label: "Camera tilt", unit: "°", min: -60, max: 0, def: -20 }, REV] },
+  roadtop: { section: "road", name: "Top-down track", sub: "straight down over it", desc: "Follows the road with the camera pointing straight down, so the road runs up the frame.",
+    params: [{ k: "alt", label: "Altitude", unit: "m", min: 15, max: 120, def: 60 }, REV] },
+  side: { section: "road", name: "Side track", sub: "parallel, looking across", desc: "Flies alongside the road, off to one side, with the camera looking across at it. Perfect for moving cars.",
+    params: [
+      { k: "offset", label: "Distance from road", unit: "m", min: 10, max: 200, def: 40 },
+      { k: "alt", label: "Altitude", unit: "m", min: 5, max: 120, def: 15 },
+      { k: "sideOf", label: "Fly on the", type: "select", options: [["right", "Right side"], ["left", "Left side"]], def: "right" }, REV] },
+  pullback: { section: "road", name: "Pull-back along road", sub: "fly forward, look back", desc: "Flies along the road with the camera facing backwards, so the road keeps unrolling into view.",
+    params: [
+      { k: "alt", label: "Altitude", unit: "m", min: 5, max: 120, def: 25 },
+      { k: "pitch", label: "Camera tilt", unit: "°", min: -60, max: 0, def: -25 }, REV] },
+  rising: { section: "road", name: "Rising road reveal", sub: "climb as you go", desc: "Follows the road while climbing and tilting down, ending on a big overview.",
+    params: [
+      { k: "z1", label: "Start altitude", unit: "m", min: 5, max: 60, def: 8 },
+      { k: "z2", label: "End altitude", unit: "m", min: 20, max: 120, def: 100 },
+      { k: "p1", label: "Start tilt", unit: "°", min: -45, max: 0, def: -10 },
+      { k: "p2", label: "End tilt", unit: "°", min: -90, max: -20, def: -60 }, REV] }
 };
 const BLDG = [
   { k: "H", label: "Building height", unit: "m", min: 3, max: 300, def: 30 },
@@ -209,12 +334,21 @@ const BLDG = [
 const FLIGHT = [
   { k: "speed", label: "Speed", unit: "m/s", min: 1, max: 15, step: 0.5, def: 4 }];
 
-const state = { center: null, preset: "orbit", vals: {}, b: {}, f: {}, wps: [], curve: null, wpU: [], tpl: null };
+const state = { section: "building", center: null, route: [], preset: "orbit", last: {}, vals: {}, b: {}, f: {}, wps: [], curve: null, wpU: [], tpl: null };
 for (const k in PRESETS) { state.vals[k] = {}; PRESETS[k].params.forEach(p => state.vals[k][p.k] = p.def); }
 BLDG.forEach(p => state.b[p.k] = p.def);
 FLIGHT.forEach(p => state.f[p.k] = p.def);
-try { const s = JSON.parse(localStorage.getItem("dsp") || "null"); if (s) { if (s.center) state.center = s.center; Object.assign(state.b, s.b || {}); Object.assign(state.f, s.f || {}); if (s.vals) for (const k in s.vals) if (state.vals[k]) Object.assign(state.vals[k], s.vals[k]); if (PRESETS[s.preset]) state.preset = s.preset; } } catch (e) {}
-function save() { try { localStorage.setItem("dsp", JSON.stringify({ center: state.center, b: state.b, f: state.f, vals: state.vals, preset: state.preset })); } catch (e) {} }
+try {
+  const s = JSON.parse(localStorage.getItem("dsp") || "null");
+  if (s) {
+    if (s.center) state.center = s.center;
+    if (Array.isArray(s.route)) state.route = s.route;
+    Object.assign(state.b, s.b || {}); Object.assign(state.f, s.f || {}); Object.assign(state.last, s.last || {});
+    if (s.vals) for (const k in s.vals) if (state.vals[k]) Object.assign(state.vals[k], s.vals[k]);
+    if (PRESETS[s.preset]) { state.preset = s.preset; state.section = PRESETS[s.preset].section; }
+  }
+} catch (e) {}
+function save() { try { localStorage.setItem("dsp", JSON.stringify({ center: state.center, route: state.route, b: state.b, f: state.f, vals: state.vals, preset: state.preset, last: state.last })); } catch (e) {} }
 
 // ---------------- UI builders ----------------
 function paramRows(container, defs, obj, onChange) {
@@ -242,14 +376,30 @@ function paramRows(container, defs, obj, onChange) {
 function setRow(container, k, v) { const row = container.querySelector(`[data-k="${k}"]`); if (row) row.querySelectorAll("input").forEach(i => i.value = v); }
 
 function renderPresets() {
+  const tabs = $("#tabs"); tabs.innerHTML = "";
+  for (const s in SECTIONS) {
+    const b = document.createElement("button"); b.textContent = SECTIONS[s]; b.className = s === state.section ? "on" : "";
+    b.onclick = () => {
+      if (s === state.section) return;
+      state.last[state.section] = state.preset; state.section = s;
+      state.preset = state.last[s] || Object.keys(PRESETS).find(k => PRESETS[k].section === s);
+      renderPresets(); recompute(true);
+    };
+    tabs.appendChild(b);
+  }
   const box = $("#presets"); box.innerHTML = "";
   for (const k in PRESETS) {
+    if (PRESETS[k].section !== state.section) continue;
     const b = document.createElement("button"); b.className = k === state.preset ? "on" : "";
     b.innerHTML = `<b>${PRESETS[k].name}</b><span>${PRESETS[k].sub}</span>`;
     b.onclick = () => { state.preset = k; renderPresets(); recompute(true); };
     box.appendChild(b);
   }
   $("#presetDesc").textContent = PRESETS[state.preset].desc;
+  $("#spotHint").textContent = HINTS[state.section];
+  $("#ctxBuilding").style.display = state.section === "building" ? "" : "none";
+  $("#ctxArea").style.display = state.section === "area" ? "" : "none";
+  $("#ctxRoad").style.display = state.section === "road" ? "" : "none";
   paramRows($("#shotParams"), PRESETS[state.preset].params, state.vals[state.preset], () => recompute(false));
 }
 paramRows($("#bldgParams"), BLDG, state.b, k => {
@@ -265,31 +415,117 @@ function aimAt(p, A) {
   if (hd > 0.5) p.heading = deg(Math.atan2(dx, dy));
   p.pitch = hd < 0.5 ? -90 : -deg(Math.atan2(p.z - A, hd));
 }
-function generate() {
-  const k = state.preset, v = state.vals[k], A = state.b.aim, pts = [];
-  if (k === "orbit" || k === "spiral") {
-    const sg = v.dir === "cw" ? 1 : -1, n = Math.max(4, Math.ceil(v.sweep / 15));
-    for (let i = 0; i <= n; i++) {
-      const f = i / n, b = v.start + sg * v.sweep * f;
-      const r = k === "orbit" ? v.radius : lerp(v.r1, v.r2, f), z = k === "orbit" ? v.alt : lerp(v.z1, v.z2, f);
-      pts.push({ ...at(b, r), z, aim: true });
-    }
-  } else if (k === "pushin" || k === "reveal") {
-    const n = Math.max(2, Math.ceil(Math.abs(v.d1 - v.d2) / 20));
-    for (let i = 0; i <= n; i++) {
-      const f = i / n, p = { ...at(v.bearing, lerp(v.d1, v.d2, f)), z: lerp(v.z1, v.z2, f) };
-      if (v.cam === "level") { p.heading = v.bearing + 180; p.pitch = 0; } else p.aim = true;
-      pts.push(p);
-    }
-  } else if (k === "flyby") {
-    const o = at(v.bearing, v.offset), t = at(v.bearing + 90, 1), s = v.dir === "lr" ? -1 : 1;
-    const n = Math.max(3, Math.ceil(v.length / 20));
-    for (let i = 0; i <= n; i++) { const d = s * lerp(-v.length / 2, v.length / 2, i / n); pts.push({ x: o.x + t.x * d, y: o.y + t.y * d, z: v.alt, aim: true }); }
-  } else if (k === "topdown") {
-    const n = 6;
-    for (let i = 0; i <= n; i++) { const f = i / n, h = v.start + v.rotate * f, p = at(h + 180, 3); pts.push({ ...p, z: lerp(v.z1, v.z2, f), heading: h, pitch: -90 }); }
+function origin() { return state.center || state.route[0] || null; }
+function toLL(p) { const c = origin(); return [c.lat + p.y / 111320, c.lng + p.x / (111320 * Math.cos(rad(c.lat)))]; }
+function fromLL(ll) { const c = origin(); return { x: (ll.lng - c.lng) * 111320 * Math.cos(rad(c.lat)), y: (ll.lat - c.lat) * 111320 }; }
+function routeLength() { let L = 0; const P = state.route.map(fromLL); for (let i = 1; i < P.length; i++) L += Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y); return L; }
+// Evenly spaced points along the drawn road, each with the road's direction (h).
+function routeSamples(rev) {
+  if (state.route.length < 2) return [];
+  let P = state.route.map(fromLL); if (rev === "back") P = P.slice().reverse();
+  const segL = []; let tot = 0;
+  for (let i = 1; i < P.length; i++) { const l = Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y); segL.push(l); tot += l; }
+  if (tot < 10) return [];
+  const n = Math.max(2, Math.round(tot / Math.max(12, tot / 150))), out = [];
+  for (let j = 0; j <= n; j++) {
+    let d = tot * j / n, i = 0;
+    while (i < segL.length - 1 && d > segL[i]) { d -= segL[i]; i++; }
+    const t = segL[i] ? Math.min(1, d / segL[i]) : 0;
+    out.push({ x: lerp(P[i].x, P[i + 1].x, t), y: lerp(P[i].y, P[i + 1].y, t) });
   }
-  pts.forEach(p => { if (p.aim) aimAt(p, A); p.heading = norm180(p.heading); p.pitch = clamp(p.pitch, -90, 30); p.speed = state.f.speed; });
+  out.forEach((p, j) => { const a = out[Math.max(0, j - 2)], b = out[Math.min(out.length - 1, j + 2)]; p.h = deg(Math.atan2(b.x - a.x, b.y - a.y)); });
+  return out;
+}
+function generate() {
+  const k = state.preset, v = state.vals[k], pts = [];
+  if (!origin()) return pts;
+  let A = state.b.aim;
+  const line = (b, d1, d2, step, fn) => { const n = Math.max(2, Math.ceil(Math.abs(d1 - d2) / step)); for (let i = 0; i <= n; i++) { const t = i / n, d = lerp(d1, d2, t); fn(at(b, d), t, d); } };
+  switch (k) {
+    case "orbit": case "arc": case "spiral": case "areaorbit": {
+      if (k === "areaorbit") A = 0;
+      const sg = v.dir === "cw" ? 1 : -1, n = Math.max(4, Math.ceil(v.sweep / (k === "arc" ? 10 : 15)));
+      for (let i = 0; i <= n; i++) {
+        const f = i / n, b = v.start + sg * v.sweep * f;
+        const r = k === "spiral" ? lerp(v.r1, v.r2, f) : v.radius, z = k === "spiral" ? lerp(v.z1, v.z2, f) : v.alt;
+        pts.push({ ...at(b, r), z, aim: true });
+      }
+      break;
+    }
+    case "pushin": case "reveal":
+      line(v.bearing, v.d1, v.d2, 20, (p, t) => {
+        p.z = lerp(v.z1, v.z2, t);
+        if (v.cam === "level") { p.heading = v.bearing + 180; p.pitch = 0; } else p.aim = true;
+        pts.push(p);
+      });
+      break;
+    case "dronie":
+      A = 1.5; line(v.bearing, v.d1, v.d2, 15, (p, t) => pts.push({ ...p, z: lerp(v.z1, v.z2, t), aim: true }));
+      break;
+    case "pedestal": {
+      const n = Math.max(3, Math.ceil(Math.abs(v.z2 - v.z1) / 6)), base = at(v.bearing, v.dist);
+      for (let i = 0; i <= n; i++) {
+        const dr = at(v.bearing + 90, i * 0.3), p = { x: base.x + dr.x, y: base.y + dr.y, z: lerp(v.z1, v.z2, i / n) };
+        if (v.cam === "aim") p.aim = true; else { p.heading = v.bearing + 180; p.pitch = 0; }
+        pts.push(p);
+      }
+      break;
+    }
+    case "flyover": {
+      const top = state.b.H + v.clear, e = state.b.foot + 25;
+      line(v.bearing, v.d1, -v.d2, 15, (p, t, d) => {
+        const z = d >= e ? lerp(v.z1, top, clamp((v.d1 - d) / Math.max(1, v.d1 - e), 0, 1)) : top;
+        pts.push({ ...p, z: Math.max(z, v.z1), heading: v.bearing + 180, pitch: lerp(-5, -50, t) });
+      });
+      break;
+    }
+    case "flyby": case "diagonal": {
+      const o = at(v.bearing, v.offset), td = at(v.bearing + 90, 1), s = v.dir === "lr" ? -1 : 1;
+      const n = Math.max(3, Math.ceil(v.length / 20));
+      for (let i = 0; i <= n; i++) {
+        const f = i / n, d = s * lerp(-v.length / 2, v.length / 2, f);
+        pts.push({ x: o.x + td.x * d, y: o.y + td.y * d, z: k === "flyby" ? v.alt : lerp(v.z1, v.z2, f), aim: true });
+      }
+      break;
+    }
+    case "topdown":
+      for (let i = 0, n = 6; i <= n; i++) { const f = i / n, h = v.start + v.rotate * f; pts.push({ ...at(h + 180, 3), z: lerp(v.z1, v.z2, f), heading: h, pitch: -90 }); }
+      break;
+    case "rocket": {
+      const n = Math.max(3, Math.ceil(Math.abs(v.z2 - v.z1) / 10));
+      for (let i = 0; i <= n; i++) pts.push({ ...at(v.heading, i * 0.3), z: lerp(v.z1, v.z2, i / n), heading: v.heading, pitch: -90 });
+      break;
+    }
+    case "establish":
+      line(v.bearing, v.d1, v.d2, 25, p => pts.push({ ...p, z: v.alt, heading: v.bearing + 180, pitch: v.pitch }));
+      break;
+    case "tiltdown":
+      line(v.bearing, v.d1, v.d2, 20, (p, t) => pts.push({ ...p, z: v.alt, heading: v.bearing + 180, pitch: lerp(v.p1, v.p2, t) }));
+      break;
+    case "birdseye":
+      line(v.bearing, -v.length / 2, v.length / 2, 25, p => pts.push({ ...p, z: v.alt, heading: v.bearing, pitch: -90 }));
+      break;
+    case "panorama": {
+      const sg = v.dir === "cw" ? 1 : -1, n = Math.max(3, Math.ceil(v.sweep / 15));
+      // fly a small 1 m/s circle so DJI turns the drone at the chosen rate
+      const r = 57.3 / v.turn;
+      for (let i = 0; i <= n; i++) { const h = v.start + sg * v.sweep * i / n; pts.push({ ...at(h + 180, r), z: v.alt, heading: h, pitch: v.pitch, speed: 1 }); }
+      break;
+    }
+    case "chase": case "roadtop": case "side": case "pullback": case "rising": {
+      const R = routeSamples(v.rev), n = R.length;
+      R.forEach((p, i) => {
+        const f = n > 1 ? i / (n - 1) : 0;
+        if (k === "chase") pts.push({ x: p.x, y: p.y, z: v.alt, heading: p.h, pitch: v.pitch });
+        else if (k === "roadtop") pts.push({ x: p.x, y: p.y, z: v.alt, heading: p.h, pitch: -90 });
+        else if (k === "pullback") pts.push({ x: p.x, y: p.y, z: v.alt, heading: p.h + 180, pitch: v.pitch });
+        else if (k === "rising") pts.push({ x: p.x, y: p.y, z: lerp(v.z1, v.z2, f), heading: p.h, pitch: lerp(v.p1, v.p2, f) });
+        else { const s = v.sideOf === "right" ? 1 : -1, o = at(p.h + 90, s * v.offset); pts.push({ x: p.x + o.x, y: p.y + o.y, z: v.alt, heading: p.h - 90 * s, pitch: -deg(Math.atan2(v.alt, v.offset)) }); }
+      });
+      break;
+    }
+  }
+  pts.forEach(p => { if (p.aim) aimAt(p, A); p.heading = norm180(p.heading); p.pitch = clamp(p.pitch, -90, 30); p.speed = p.speed || state.f.speed; });
   return pts;
 }
 function buildCurve(wps) {
@@ -306,7 +542,6 @@ function attitudeAt(u) {
   const dh = norm180(w[i + 1].heading - w[i].heading);
   return { heading: w[i].heading + dh * t, pitch: lerp(w[i].pitch, w[i + 1].pitch, t) };
 }
-function toLL(p) { const c = state.center; return [c.lat + p.y / 111320, c.lng + p.x / (111320 * Math.cos(rad(c.lat)))]; }
 
 // ---------------- map ----------------
 const map = L.map("map", { zoomControl: true }).setView([20, 0], 2);
@@ -314,7 +549,10 @@ L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/
 const pathLayer = L.layerGroup().addTo(map);
 new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
 let pin = null;
-map.on("click", e => setCenter(e.latlng, false));
+map.on("click", e => {
+  if (state.section === "road") { state.route.push({ lat: e.latlng.lat, lng: e.latlng.lng }); recompute(false); }
+  else setCenter(e.latlng, false);
+});
 function setCenter(ll, fly) {
   state.center = { lat: ll.lat, lng: ll.lng };
   if (!pin) { pin = L.marker(ll, { draggable: true }).addTo(map); pin.on("dragend", () => setCenter(pin.getLatLng(), false)); }
@@ -323,11 +561,19 @@ function setCenter(ll, fly) {
   if (fly) map.setView(ll, 18);
   recompute(false);
 }
+$("#rUndo").onclick = () => { state.route.pop(); recompute(false); };
+$("#rClear").onclick = () => { state.route = []; recompute(false); };
 function drawMap(fit) {
   pathLayer.clearLayers();
-  if (!state.center || !state.curve) return;
-  const c = state.center;
-  L.circle([c.lat, c.lng], { radius: state.b.foot, color: "#ff5c5c", weight: 1, dashArray: "4 4", fillOpacity: .12 }).addTo(pathLayer);
+  if (!origin()) return;
+  if (pin) pin.setOpacity(state.section === "road" ? 0.4 : 1);
+  if (state.section === "building" && state.center)
+    L.circle([state.center.lat, state.center.lng], { radius: state.b.foot, color: "#ff5c5c", weight: 1, dashArray: "4 4", fillOpacity: .12 }).addTo(pathLayer);
+  if (state.section === "road" && state.route.length) {
+    L.polyline(state.route.map(p => [p.lat, p.lng]), { color: "#ffffff", weight: 2, dashArray: "6 6" }).addTo(pathLayer);
+    state.route.forEach((p, i) => L.circleMarker([p.lat, p.lng], { radius: 4, color: "#fff", fillColor: i === 0 ? "#3fd47a" : "#fff", fillOpacity: 1, weight: 1 }).addTo(pathLayer));
+  }
+  if (!state.curve) return;
   const pts = state.curve.getSpacedPoints(Math.max(50, state.wps.length * 12)).map(p => toLL(p));
   const line = L.polyline(pts, { color: "#ffcc33", weight: 3 }).addTo(pathLayer);
   state.wps.forEach((w, i) => {
@@ -341,14 +587,16 @@ function drawMap(fit) {
 }
 $("#go").onclick = search;
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+// In the Roads tab a search just moves the map (you then draw the road); elsewhere it drops the pin.
+function goTo(ll) { if (state.section === "road") map.setView([ll.lat, ll.lng], 18); else setCenter(ll, true); }
 async function search() {
   const q = $("#q").value.trim(); if (!q) return;
   const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
-  if (m) return setCenter({ lat: +m[1], lng: +m[2] }, true);
+  if (m) return goTo({ lat: +m[1], lng: +m[2] });
   try {
     const r = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q));
     const j = await r.json();
-    if (j[0]) setCenter({ lat: +j[0].lat, lng: +j[0].lon }, true); else $("#pinInfo").textContent = "Not found. Try a fuller address, or tap the map.";
+    if (j[0]) goTo({ lat: +j[0].lat, lng: +j[0].lon }); else $("#pinInfo").textContent = "Not found. Try a fuller address, or tap the map.";
   } catch (e) { $("#pinInfo").textContent = "Search failed (offline?). Tap the map instead."; }
 }
 
@@ -358,17 +606,21 @@ const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9cc4e4);
-scene.fog = new THREE.Fog(0x9cc4e4, 300, 1400);
+scene.fog = new THREE.Fog(0x9cc4e4, 400, 2200);
 scene.add(new THREE.HemisphereLight(0xffffff, 0x556644, 0.9));
 const sun = new THREE.DirectionalLight(0xffffff, 0.7); sun.position.set(200, 400, 100); scene.add(sun);
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshLambertMaterial({ color: 0x6d7d5c }));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000), new THREE.MeshLambertMaterial({ color: 0x6d7d5c }));
 ground.rotation.x = -Math.PI / 2; scene.add(ground);
-const grid = new THREE.GridHelper(2000, 100, 0x8a9878, 0x7c8a6c); grid.position.y = 0.05; scene.add(grid);
-const droneCam = new THREE.PerspectiveCamera(50, 16 / 9, 0.5, 4000); droneCam.rotation.order = "YXZ";
-const overCam = new THREE.PerspectiveCamera(45, 16 / 9, 1, 6000);
-let viewMode = "drone", building = null, pathObj = null, wpObjs = null;
+const grid = new THREE.GridHelper(3000, 150, 0x8a9878, 0x7c8a6c); grid.position.y = 0.05; scene.add(grid);
+const droneCam = new THREE.PerspectiveCamera(50, 16 / 9, 0.5, 5000); droneCam.rotation.order = "YXZ";
+const overCam = new THREE.PerspectiveCamera(45, 16 / 9, 1, 8000);
+let viewMode = "drone", building = null, pathObj = null, wpObjs = null, roadObj = null;
 const droneDot = new THREE.Mesh(new THREE.SphereGeometry(2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3333 }));
 scene.add(droneDot);
+const pinPost = new THREE.Group();
+{ const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 3, 8), new THREE.MeshLambertMaterial({ color: 0xff4444 })); pole.position.y = 1.5; pinPost.add(pole);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(3, 4, 32), new THREE.MeshBasicMaterial({ color: 0xff4444, side: THREE.DoubleSide })); ring.rotation.x = -Math.PI / 2; ring.position.y = 0.1; pinPost.add(ring); }
+scene.add(pinPost);
 const loc2three = p => new THREE.Vector3(p.x, p.z, -p.y);
 
 function windowTexture() {
@@ -388,20 +640,46 @@ function rebuildBuilding() {
   aim.position.y = state.b.aim; building.add(aim);
   scene.add(building);
 }
+// The drawn road as a grey ribbon with a dashed centre line.
+function rebuildRoad() {
+  if (roadObj) { scene.remove(roadObj); roadObj.traverse(o => { if (o.geometry) o.geometry.dispose(); }); roadObj = null; }
+  if (state.section !== "road" || state.route.length < 2) return;
+  const P = state.route.map(fromLL), W = 5, pos = [], idx = [];
+  P.forEach((p, i) => {
+    const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)], h = Math.atan2(b.x - a.x, b.y - a.y);
+    const nx = Math.cos(h) * W, ny = -Math.sin(h) * W;
+    pos.push(p.x - nx, 0.15, -(p.y - ny), p.x + nx, 0.15, -(p.y + ny));
+    if (i) { const k = i * 2; idx.push(k - 2, k - 1, k, k - 1, k + 1, k); }
+  });
+  const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  roadObj = new THREE.Group();
+  roadObj.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x3a3d42, side: THREE.DoubleSide })));
+  const centre = new THREE.Line(new THREE.BufferGeometry().setFromPoints(P.map(p => new THREE.Vector3(p.x, 0.3, -p.y))), new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 4, gapSize: 4 }));
+  centre.computeLineDistances(); roadObj.add(centre);
+  scene.add(roadObj);
+}
+function clearPath() {
+  if (pathObj) { scene.remove(pathObj); pathObj.geometry.dispose(); pathObj = null; }
+  if (wpObjs) { scene.remove(wpObjs); wpObjs = null; }
+}
 function rebuildPath() {
-  if (pathObj) { scene.remove(pathObj); pathObj.geometry.dispose(); }
-  if (wpObjs) scene.remove(wpObjs);
+  clearPath();
+  building.visible = state.section === "building";
+  pinPost.visible = state.section === "area";
+  rebuildRoad();
+  if (!state.curve) return;
   const pts = state.curve.getSpacedPoints(300).map(loc2three);
   pathObj = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffcc33 }));
   scene.add(pathObj);
   wpObjs = new THREE.Group();
   state.wps.forEach(w => { const m = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff })); m.position.copy(loc2three(w)); wpObjs.add(m); });
   scene.add(wpObjs);
-  // overview camera framing
-  let R = state.b.foot * 2, Z = state.b.H;
-  state.wps.forEach(w => { R = Math.max(R, Math.hypot(w.x, w.y)); Z = Math.max(Z, w.z); });
-  overCam.position.set(-R * 1.5, Math.max(Z * 1.6, R * 0.9), R * 1.5);
-  overCam.lookAt(0, state.b.H * 0.4, 0);
+  // overview camera: frame the whole path
+  const box = new THREE.Box3().setFromPoints(pts); box.expandByPoint(new THREE.Vector3(0, 0, 0));
+  const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+  const R = Math.max(size.x, size.z, 40) * 0.75, Z = Math.max(size.y, state.section === "building" ? state.b.H : 10);
+  overCam.position.set(c.x - R * 1.3, Math.max(Z * 1.6, R * 0.9), c.z + R * 1.3);
+  overCam.lookAt(c.x, Math.min(c.y, Z * 0.4), c.z);
 }
 
 let playing = true, t = 0, dur = 1, last = performance.now();
@@ -416,7 +694,7 @@ function frame(now) {
     $("#hTime").textContent = mmss(u * dur) + " / " + mmss(dur);
     $("#hInfo").textContent = `ALT ${Math.round(p.z)}m  GIMBAL ${Math.round(a.pitch)}°  HDG ${Math.round((a.heading + 360) % 360)}°`;
   }
-  const drone = viewMode === "drone";
+  const drone = viewMode === "drone" && !!state.curve;
   droneDot.visible = pathObj ? !drone : false; if (pathObj) pathObj.visible = !drone; if (wpObjs) wpObjs.visible = !drone;
   $("#frame").style.display = drone ? "" : "none";
   renderer.render(scene, drone ? droneCam : overCam);
@@ -436,24 +714,40 @@ $("#vOver").onclick = () => { viewMode = "over"; $("#vOver").className = "on"; $
 // ---------------- recompute + checks ----------------
 function recompute(fit) {
   state.wps = generate();
-  state.curve = buildCurve(state.wps);
-  const len = state.curve.getLength(); dur = len / state.f.speed; t = Math.min(t, dur);
+  state.curve = state.wps.length >= 2 ? buildCurve(state.wps) : null;
+  if (state.section === "road") {
+    const n = state.route.length;
+    $("#routeInfo").textContent = n === 0 ? "Tap along the road on the map, start to end. Add a point at every bend."
+      : n === 1 ? "Good start. Keep tapping along the road." : `${n} points · ${Math.round(routeLength())} m of road. Keep tapping to extend it.`;
+  }
   rebuildPath();
-  $("#sDur").textContent = mmss(dur); $("#sLen").textContent = Math.round(len) + " m"; $("#sWp").textContent = state.wps.length;
-  $("#sAlt").textContent = Math.round(Math.max(...state.wps.map(w => w.z))) + " m";
-  const warns = [], H = state.b.H, F = state.b.foot;
-  let hit = false; for (const p of state.curve.getSpacedPoints(Math.ceil(len))) if (Math.hypot(p.x, p.y) < F + 5 && p.z < H + 5) { hit = true; break; }
-  if (hit) warns.push(["bad", "Path goes through or within 5 m of the building. Move it further out or higher."]);
-  if (state.wps.some(w => w.z > 120)) warns.push(["warn", "Goes above 120 m, the legal limit in most countries."]);
-  if (state.wps.some(w => w.z < 3)) warns.push(["warn", "Very low (under 3 m). Only fly this over clear, flat ground."]);
-  if (state.f.speed > 10) warns.push(["warn", "Fast for a cinematic shot. 2–6 m/s usually looks smoother."]);
-  for (let i = 1; i < state.wps.length; i++) { const a = state.wps[i - 1], b = state.wps[i]; if (Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) < 1) { warns.push(["warn", "Two waypoints are under 1 m apart; DJI Fly may reject that."]); break; } }
-  if (!state.center) warns.push(["warn", "Drop a pin on the building to place the shot on the map and enable export."]);
-  if (!warns.length) warns.push(["ok", "No clearance problems found against the building you set. Still check for trees, wires and other buildings."]);
+  const warns = [];
+  if (!state.curve) {
+    dur = 1; t = 0;
+    ["#sDur", "#sLen", "#sWp", "#sAlt"].forEach(s => $(s).textContent = "–");
+    $("#hTime").textContent = "--:--";
+    $("#hInfo").textContent = state.section === "road" ? "Draw the road on the map" : "Drop a pin on the map";
+    warns.push(["warn", state.section === "road" ? "Draw the road on the map (at least 2 points) to build this shot." : "Drop a pin on the map to place the shot and enable export."]);
+  } else {
+    const len = state.curve.getLength(), avgSpeed = state.wps.reduce((a, w) => a + w.speed, 0) / state.wps.length; dur = len / avgSpeed; t = Math.min(t, dur);
+    $("#sDur").textContent = mmss(dur); $("#sLen").textContent = Math.round(len) + " m"; $("#sWp").textContent = state.wps.length;
+    $("#sAlt").textContent = Math.round(Math.max(...state.wps.map(w => w.z))) + " m";
+    if (state.section === "building") {
+      const H = state.b.H, F = state.b.foot;
+      let hit = false; for (const p of state.curve.getSpacedPoints(Math.ceil(len))) if (Math.hypot(p.x, p.y) < F + 5 && p.z < H + 5) { hit = true; break; }
+      if (hit) warns.push(["bad", "Path goes through or within 5 m of the building. Move it further out or higher."]);
+    }
+    if (state.wps.some(w => w.z > 120)) warns.push(["warn", "Goes above 120 m, the legal limit in most countries."]);
+    if (state.wps.some(w => w.z < 3)) warns.push(["warn", "Very low (under 3 m). Only fly this over clear, flat ground."]);
+    if (state.section === "road") warns.push(["warn", "Over roads: stay to the side of traffic where you can, and check local rules about flying over moving vehicles."]);
+    if (state.f.speed > 10) warns.push(["warn", "Fast for a cinematic shot. 2–6 m/s usually looks smoother."]);
+    for (let i = 1; i < state.wps.length; i++) { const a = state.wps[i - 1], b = state.wps[i]; if (Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) < 1) { warns.push(["warn", "Two waypoints are under 1 m apart; DJI Fly may reject that."]); break; } }
+    if (!warns.length) warns.push(["ok", state.section === "building" ? "No clearance problems found against the building you set. Still check for trees, wires and other buildings." : "Path looks fine. The app can't see trees, wires or buildings here, so check the area before flying."]);
+  }
   $("#warns").innerHTML = warns.map(([c, m]) => `<li class="${c}">${m}</li>`).join("");
-  $("#exportTpl").disabled = !(state.center && state.tpl);
-  $("#exportFresh").disabled = !state.center;
-  drawMap(fit);
+  $("#exportTpl").disabled = !(state.curve && state.tpl);
+  $("#exportFresh").disabled = !state.curve;
+  drawMap(fit && !!state.curve);
   save();
 }
 
@@ -546,7 +840,7 @@ function rewriteDoc(doc) {
   const len = state.curve.getLength();
   if (directChild(parent, "autoFlightSpeed")) ensure(doc, ns, parent, "autoFlightSpeed", fmt(state.f.speed));
   if (directChild(parent, "distance")) ensure(doc, ns, parent, "distance", fmt(len));
-  if (directChild(parent, "duration")) ensure(doc, ns, parent, "duration", fmt(len / state.f.speed));
+  if (directChild(parent, "duration")) ensure(doc, ns, parent, "duration", fmt(dur));
   setAll(doc, "updateTime", Date.now());
 }
 function serialize(doc, original) {
@@ -584,7 +878,7 @@ function freshXML(kind) {
   }).join("\n");
   const folder = kind === "template"
     ? `<wpml:templateType>waypoint</wpml:templateType><wpml:templateId>0</wpml:templateId><wpml:waylineCoordinateSysParam><wpml:coordinateMode>WGS84</wpml:coordinateMode><wpml:heightMode>relativeToStartPoint</wpml:heightMode></wpml:waylineCoordinateSysParam><wpml:autoFlightSpeed>${sp}</wpml:autoFlightSpeed><wpml:globalHeight>${fmt(wps[0].z)}</wpml:globalHeight><wpml:caliFlightEnable>0</wpml:caliFlightEnable><wpml:gimbalPitchMode>usePointSetting</wpml:gimbalPitchMode><wpml:globalWaypointHeadingParam><wpml:waypointHeadingMode>smoothTransition</wpml:waypointHeadingMode><wpml:waypointHeadingAngle>0</wpml:waypointHeadingAngle><wpml:waypointPoiPoint>0.000000,0.000000,0.000000</wpml:waypointPoiPoint><wpml:waypointHeadingPathMode>followBadArc</wpml:waypointHeadingPathMode></wpml:globalWaypointHeadingParam><wpml:globalWaypointTurnMode>toPointAndPassWithContinuityCurvature</wpml:globalWaypointTurnMode><wpml:globalUseStraightLine>0</wpml:globalUseStraightLine>`
-    : `<wpml:templateId>0</wpml:templateId><wpml:executeHeightMode>relativeToStartPoint</wpml:executeHeightMode><wpml:waylineId>0</wpml:waylineId><wpml:distance>${fmt(len)}</wpml:distance><wpml:duration>${fmt(len / state.f.speed)}</wpml:duration><wpml:autoFlightSpeed>${sp}</wpml:autoFlightSpeed>`;
+    : `<wpml:templateId>0</wpml:templateId><wpml:executeHeightMode>relativeToStartPoint</wpml:executeHeightMode><wpml:waylineId>0</wpml:waylineId><wpml:distance>${fmt(len)}</wpml:distance><wpml:duration>${fmt(dur)}</wpml:duration><wpml:autoFlightSpeed>${sp}</wpml:autoFlightSpeed>`;
   const head = kind === "template" ? `<wpml:author>Drone Shot Presets</wpml:author><wpml:createTime>${now}</wpml:createTime><wpml:updateTime>${now}</wpml:updateTime>` : "";
   return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="${NS_KML}" xmlns:wpml="${ns}">\n<Document>${head}${cfg}\n<Folder>${folder}\n${pms}\n</Folder>\n</Document>\n</kml>\n`;
 }
@@ -598,7 +892,9 @@ $("#exportFresh").onclick = async () => {
 // ---------------- boot ----------------
 renderPresets();
 rebuildBuilding();
-if (state.center) { setCenter(state.center, false); recompute(true); } else recompute(false);
+if (state.center) setCenter(state.center, false);
+recompute(true);
+if (!state.curve && origin()) map.setView([origin().lat, origin().lng], 17);
 resize();
 requestAnimationFrame(frame);
 </script>
